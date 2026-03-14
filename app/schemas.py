@@ -39,9 +39,8 @@ class MemberShift(BaseModel):
 class MemberOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: str
-    name: str
     student_id: str = Field(alias="studentId")
+    name: str
     department: str
     position: str
     submitted: bool
@@ -55,9 +54,14 @@ class RosterStatusResponse(BaseModel):
 
 
 class ScheduleMember(BaseModel):
-    student_id: str
+    model_config = ConfigDict(populate_by_name=True)
+    
+    student_id: str = Field(alias="studentId")
     name: str
+    department: str
     position: str
+    submitted: bool
+    shifts: List[MemberShift] = []
 
 
 class ScheduleResultResponse(RootModel[Dict[str, List[ScheduleMember]]]):
