@@ -1,0 +1,39 @@
+这是一个 前后端分离 的排班系统：后端 FastAPI（端口 8000），前端 Vite + React。
+
+一、前置条件
+MySQL
+
+已安装并运行。
+创建数据库：scheduling_db（后端会在首次启动时建表）。
+连接信息在 app/database.py：root / 1472580369abc @ localhost:3306，如需修改可改该文件。
+Python 3（建议 3.10+）
+
+Node.js（用于前端）
+
+二、启动后端
+在项目根目录 d:\app_extension\cursor_projects\scheduling-app 下执行：
+
+# 1. 创建并进入虚拟环境（可选但推荐）
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+# 2. 安装依赖
+pip install -r requirements.txt
+# 3. 启动 FastAPI（端口 8000）
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+看到类似 Uvicorn running on http://0.0.0.0:8000 即表示后端已启动。
+健康检查：浏览器访问 **http://127.0.0.1:8000/health**，应返回 {"status":"ok"}。
+
+三、启动前端
+新开一个终端，在项目根目录下执行：
+
+cd front
+npm install
+npm run dev
+按终端里提示的地址访问（一般是 **http://localhost:5173**）。前端会请求 http://127.0.0.1:8000 的后端 API。
+
+四、运行顺序小结
+步骤	操作	说明
+1	确保 MySQL 已运行，并存在 scheduling_db	否则后端会连库失败
+2	在项目根目录：pip install -r requirements.txt 后执行 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000	后端
+3	在 front 目录：npm install 后执行 npm run dev	前端
+先起后端，再起前端；访问前端页面即可使用完整功能。若你贴出当前卡在哪一步（例如 MySQL 未装、uvicorn 报错等），可以按你的环境一步步改命令或配置。

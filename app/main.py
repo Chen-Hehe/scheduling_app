@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from math import ceil
 from typing import Dict, List, Tuple, Optional
 
-import networkx as nx
 import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -168,16 +168,9 @@ def submit_preferences(payload: PreferencesSubmitRequest, db: Session = Depends(
             raise HTTPException(status_code=400, detail=f"重复的 shift_id: {s.shift_id}")
         seen_shift_ids.add(s.shift_id)
 
-        # 权限检查：第三四节只有副部长可以填写
-        week, day, time_slot = _parse_shift_id(s.shift_id)
-        if time_slot == "第三四节" and member.position != "副部长":
-            raise HTTPException(
-                status_code=403, 
-                detail="第三四节（12:00–14:10）仅限副部长填写"
-            )
-
         shift = db.query(models.Shift).filter(models.Shift.shift_id == s.shift_id).first()
         if not shift:
+            week, day, time_slot = _parse_shift_id(s.shift_id)
             shift = models.Shift(
                 shift_id=s.shift_id,
                 week=week,
@@ -330,122 +323,137 @@ def _position_category(position: str) -> str:
     return "officers"
 
 
+def _pick_candidate_for_shift(
+    shift_id: str,
+    candidates: List[models.Member],
+    pref_rank_map: Dict[Tuple[str, str], int],
+    member_assigned_count: Dict[str, int],
+    member_capacity: Dict[str, int],
+) -> Optional[models.Member]:
+    best: Optional[models.Member] = None
+    best_score: Optional[Tuple[int, int, str]] = None
+    for m in candidates:
+        if member_assigned_count[m.student_id] >= member_capacity[m.student_id]:
+            continue
+        rank = pref_rank_map.get((m.student_id, shift_id))
+        if rank is None:
+            continue
+        score = (rank, member_assigned_count[m.student_id], m.student_id)
+        if best_score is None or score < best_score:
+            best_score = score
+            best = m
+    return best
 
 
 @app.post("/api/admin/schedule/generate", response_model=MessageResponse)
 def generate_schedule(db: Session = Depends(get_db)):
     """
-    基于最小费用最大流（Min-Cost Max-Flow）的全局最优排班算法：
-    1. 结构控制：优先保证 1个部长/副部 + 干事
-    2. 按需排班：仅排满 min_required，去除 avg_cap
-    3. 允许连班：不限制同天多次排班
-    4. 绝对公平：全局满意度最高（rank 之和最小）
+    清空 Schedule 表后生成排班：
+    - 部长/副部最多 2 个班，干事最多 1 个班
+    - 尽量优先满足低 rank 志愿
+    - 尽量保证班次均匀，且尽量不空班
     """
+    # 只对已提交志愿的成员进行排班
     members: List[models.Member] = (
         db.query(models.Member)
         .filter(models.Member.has_submitted.is_(True))
+        .order_by(models.Member.student_id.asc())
         .all()
     )
     if not members:
         raise HTTPException(status_code=400, detail="暂无已提交志愿的成员，无法生成排班")
 
-    shifts: List[models.Shift] = db.query(models.Shift).all()
+    # 班次以 shifts 表为准；如果 shifts 为空，则从 preferences 里推断
+    shifts: List[models.Shift] = db.query(models.Shift).order_by(models.Shift.shift_id.asc()).all()
     if not shifts:
         pref_shift_ids = [r[0] for r in db.query(models.Preference.shift_id).distinct().all()]
         for sid in pref_shift_ids:
             week, day, time_slot = _parse_shift_id(sid)
             db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=time_slot, min_required=1))
         db.commit()
-        shifts = db.query(models.Shift).all()
+        shifts = db.query(models.Shift).order_by(models.Shift.shift_id.asc()).all()
 
-    prefs: List[models.Preference] = db.query(models.Preference).all()
-    pref_rank_map = {(p.student_id, p.shift_id): p.preference_rank for p in prefs}
+    # 读取所有 preferences
+    prefs: List[models.Preference] = (
+        db.query(models.Preference)
+        .order_by(models.Preference.student_id.asc(), models.Preference.preference_rank.asc())
+        .all()
+    )
+    pref_rank_map: Dict[Tuple[str, str], int] = {(p.student_id, p.shift_id): p.preference_rank for p in prefs}
 
-    member_capacity = {m.student_id: _max_count_by_position(m.position) for m in members}
+    # 每个人的容量
+    member_capacity: Dict[str, int] = {m.student_id: _max_count_by_position(m.position) for m in members}
+    member_assigned_count: Dict[str, int] = {m.student_id: 0 for m in members}
 
-    # =========================================================
-    # 构建最小费用最大流网络图 (Min-Cost Max-Flow Graph)
-    # =========================================================
-    G = nx.DiGraph()
-    G.add_node("S")  # 源点 (Source)
-    G.add_node("T")  # 汇点 (Sink)
+    # shift 当前人数
+    shift_assignees: Dict[str, List[str]] = {s.shift_id: [] for s in shifts}
 
-    mid_to_shift: Dict[str, str] = {}  # 记录中间节点对应的 shift_id
-
-    # 1. 源点 -> 成员节点 (限制每个人的最大排班数)
-    for m in members:
-        G.add_edge("S", f"M_{m.student_id}", capacity=member_capacity[m.student_id], weight=0)
-
-    # 2. 班次节点 -> 汇点 (严格按照 min_required 限制需求人数)
-    for s in shifts:
-        req = s.min_required or 0
-        if req == 0:
-            continue
-
-        leader_req = 1
-        regular_req = max(0, req - 1)
-
-        G.add_edge(f"Shift_{s.shift_id}_L", "T", capacity=leader_req, weight=0)
-        if regular_req > 0:
-            G.add_edge(f"Shift_{s.shift_id}_R", "T", capacity=regular_req, weight=0)
-
-    # 3. 成员节点 -> 班次节点
-    for m in members:
-        is_leader = _position_category(m.position) in ("ministers", "vice_ministers")
-
-        for s in shifts:
-            if (s.min_required or 0) == 0:
-                continue
-
-            regular_req = max(0, (s.min_required or 0) - 1)
-
-            mid_node = f"Mid_{m.student_id}_{s.shift_id}"
-            mid_to_shift[mid_node] = s.shift_id
-            G.add_edge(f"M_{m.student_id}", mid_node, capacity=1, weight=0)
-
-            rank = pref_rank_map.get((m.student_id, s.shift_id))
-            is_preferred = rank is not None
-            base_weight = rank * 10 if is_preferred else 500
-
-            if is_leader:
-                G.add_edge(mid_node, f"Shift_{s.shift_id}_L", capacity=1, weight=base_weight)
-            else:
-                G.add_edge(mid_node, f"Shift_{s.shift_id}_L", capacity=1, weight=base_weight + 5000)
-
-            if regular_req > 0:
-                G.add_edge(mid_node, f"Shift_{s.shift_id}_R", capacity=1, weight=base_weight + 5)
-
-    # =========================================================
-    # 求解网络流
-    # =========================================================
-    try:
-        flow_dict = nx.max_flow_min_cost(G, "S", "T")
-    except nx.NetworkXUnfeasible:
-        raise HTTPException(status_code=500, detail="排班图无解，请检查基础容量配置。")
-
-    # =========================================================
-    # 解析并保存排班结果
-    # =========================================================
+    # 先清空旧排班
     db.query(models.Schedule).delete()
     db.commit()
 
-    now = datetime.now()
-    assigned_count = 0
+    # Step 1: 尽量让每个班次至少 1 人（不空班）
+    for s in shifts:
+        cand = _pick_candidate_for_shift(
+            s.shift_id,
+            members,
+            pref_rank_map,
+            member_assigned_count,
+            member_capacity,
+        )
+        if cand is None:
+            continue
+        shift_assignees[s.shift_id].append(cand.student_id)
+        member_assigned_count[cand.student_id] += 1
+
+    # Step 2: 按 min_required 填满最低人数
+    for s in shifts:
+        while len(shift_assignees[s.shift_id]) < (s.min_required or 1):
+            cand = _pick_candidate_for_shift(
+                s.shift_id,
+                members,
+                pref_rank_map,
+                member_assigned_count,
+                member_capacity,
+            )
+            if cand is None:
+                break
+            if cand.student_id in shift_assignees[s.shift_id]:
+                break
+            shift_assignees[s.shift_id].append(cand.student_id)
+            member_assigned_count[cand.student_id] += 1
+
+    # Step 3: 平衡填充到一个“均衡上限”
+    total_capacity = sum(member_capacity.values())
+    avg_cap = ceil(total_capacity / max(len(shifts), 1))
+    shift_cap: Dict[str, int] = {s.shift_id: max(s.min_required or 1, avg_cap) for s in shifts}
 
     for m in members:
-        m_node = f"M_{m.student_id}"
-        if m_node in flow_dict:
-            for mid_node, flow_val in flow_dict[m_node].items():
-                if flow_val > 0:
-                    for shift_slot, slot_flow in flow_dict[mid_node].items():
-                        if slot_flow > 0:
-                            shift_id = mid_to_shift[mid_node]
-                            db.add(models.Schedule(student_id=m.student_id, shift_id=shift_id, assigned_at=now))
-                            assigned_count += 1
-                            break
+        while member_assigned_count[m.student_id] < member_capacity[m.student_id]:
+            # 取该成员的志愿按 rank 排序
+            m_prefs = [(sid, rank) for (msid, sid), rank in pref_rank_map.items() if msid == m.student_id]
+            m_prefs.sort(key=lambda x: x[1])
+            assigned = False
+            for sid, _rank in m_prefs:
+                if m.student_id in shift_assignees.get(sid, []):
+                    continue
+                if len(shift_assignees.get(sid, [])) >= shift_cap.get(sid, avg_cap):
+                    continue
+                shift_assignees.setdefault(sid, []).append(m.student_id)
+                member_assigned_count[m.student_id] += 1
+                assigned = True
+                break
+            if not assigned:
+                break
 
+    # 写入 Schedule 表
+    now = datetime.now()
+    for sid, student_ids in shift_assignees.items():
+        for st in student_ids:
+            db.add(models.Schedule(student_id=st, shift_id=sid, assigned_at=now))
     db.commit()
-    return MessageResponse(message=f"排班生成成功，全局最优分配 {assigned_count} 人次")
+
+    return MessageResponse(message="排班生成成功")
 
 
 @app.get("/api/admin/schedule", response_model=ScheduleResultResponse)
