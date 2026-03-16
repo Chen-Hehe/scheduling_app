@@ -1,6 +1,7 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { Member, ScheduleResult } from "../../data/mockData";
 import { TIME_COLORS, POSITION_COLORS, ROLE_MAX_COUNT, MAX_PER_SLOT, timeRange, getHeadcount, WeekType } from "../../data/constants";
+import { apiGetPersonalAdjustment } from "../../api";
 import { X, ToggleLeft, ToggleRight, User, AlertTriangle } from "lucide-react";
 
 interface RelatedShift {
@@ -14,34 +15,54 @@ interface RelatedShift {
 }
 
 export function PersonalAdjustmentModal({ member, scheduleResult, onApply, onClose }: { member: Member; scheduleResult: ScheduleResult; onApply: (memberId: string, addedSlots: string[], removedSlots: string[]) => void; onClose: () => void; }) {
-  const buildRelatedShifts = (): RelatedShift[] => {
-    const shiftsMap = new Map<string, RelatedShift>();
-    member.shifts.forEach((s, idx) => {
-      const slotKey = `${s.week}-${s.day}-${s.time}`;
-      const assigned = scheduleResult[slotKey] ?? [];
-      const isAssigned = assigned.some((m) => m.studentId === member.studentId);
-      const hc = getHeadcount(assigned);
-      shiftsMap.set(slotKey, { slotKey, weekType: s.week, day: s.day, time: s.time, preferenceRank: idx + 1, isAssigned, headcount: hc });
-    });
-    for (const [slotKey, members] of Object.entries(scheduleResult)) {
-      if (members.some((m) => m.studentId === member.studentId) && !shiftsMap.has(slotKey)) {
-        const parts = slotKey.split("-");
-        const weekType = parts[0] as WeekType;
-        const day = parts[1];
-        const time = parts[2];
-        const hc = getHeadcount(members);
-        shiftsMap.set(slotKey, { slotKey, weekType, day, time, preferenceRank: null, isAssigned: true, headcount: hc });
+  const [relatedShifts, setRelatedShifts] = useState<RelatedShift[]>([]);
+  const [loading, setLoading] = useState(true);
+  const originalAssignment = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const loadPersonalAdjustment = async () => {
+      try {
+        const data = await apiGetPersonalAdjustment(member.studentId);
+        const shiftsMap = new Map<string, RelatedShift>();
+        
+        data.related_shifts.forEach((rs) => {
+          const parts = rs.shift_id.split("-");
+          const weekType = parts[0] as WeekType;
+          const day = parts[1];
+          const time = parts[2];
+          shiftsMap.set(rs.shift_id, {
+            slotKey: rs.shift_id,
+            weekType,
+            day,
+            time,
+            preferenceRank: rs.preference_rank,
+            isAssigned: rs.is_assigned,
+            headcount: {
+              ministers: rs.headcount.ministers,
+              viceMinistersCount: rs.headcount.vice_ministers,
+              officers: rs.headcount.officers,
+            },
+          });
+        });
+        
+        const sorted = Array.from(shiftsMap.values()).sort((a, b) => {
+          if (a.preferenceRank === null && b.preferenceRank === null) return 0;
+          if (a.preferenceRank === null) return 1;
+          if (b.preferenceRank === null) return -1;
+          return a.preferenceRank - b.preferenceRank;
+        });
+        
+        setRelatedShifts(sorted);
+        originalAssignment.current = new Set(sorted.filter((s) => s.isAssigned).map((s) => s.slotKey));
+      } catch (e) {
+        console.error("Failed to load personal adjustment data:", e);
+      } finally {
+        setLoading(false);
       }
-    }
-    return Array.from(shiftsMap.values()).sort((a, b) => {
-      if (a.preferenceRank === null && b.preferenceRank === null) return 0;
-      if (a.preferenceRank === null) return 1;
-      if (b.preferenceRank === null) return -1;
-      return a.preferenceRank - b.preferenceRank;
-    });
-  };
-  const [relatedShifts, setRelatedShifts] = useState<RelatedShift[]>(buildRelatedShifts);
-  const originalAssignment = useRef(new Set(buildRelatedShifts().filter((s) => s.isAssigned).map((s) => s.slotKey)));
+    };
+    
+    loadPersonalAdjustment();
+  }, [member.studentId]);
   const maxCount = ROLE_MAX_COUNT[member.position] ?? 1;
   const currentCount = relatedShifts.filter((s) => s.isAssigned).length;
   const progressColor = currentCount < maxCount ? "text-orange-500 bg-orange-50 border-orange-200" : currentCount === maxCount ? "text-green-600 bg-green-50 border-green-200" : "text-red-500 bg-red-50 border-red-200";
@@ -97,7 +118,12 @@ export function PersonalAdjustmentModal({ member, scheduleResult, onApply, onClo
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {relatedShifts.length === 0 ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="w-8 h-8 rounded-full border-2 border-gray-200 border-t-blue-500 animate-spin mb-3" />
+              <p className="text-gray-400 text-sm">加载中…</p>
+            </div>
+          ) : relatedShifts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <User className="w-10 h-10 text-gray-200 mb-3" />
               <p className="text-gray-400 text-sm">该成员无相关班次数据</p>
@@ -147,11 +173,11 @@ export function PersonalAdjustmentModal({ member, scheduleResult, onApply, onClo
           <div className="flex items-center gap-3 text-xs text-gray-400">
             {hasChanges && (<div className="flex items-center gap-1.5 text-orange-500"><AlertTriangle className="w-3.5 h-3.5" /><span style={{ fontWeight: 500 }}>有未保存的修改</span></div>)}
             {currentCount > maxCount && (<div className="flex items-center gap-1.5 text-red-500"><AlertTriangle className="w-3.5 h-3.5" /><span style={{ fontWeight: 500 }}>当前处于超排状态 ({currentCount}/{maxCount})</span></div>)}
-            {currentCount < maxCount && (<div className="flex items-center gap-1.5 text-orange-500"><AlertTriangle className="w-3.5 h-3.5" /><span style={{ fontWeight: 500 }}>排班未满 ({currentCount}/{maxCount})</span></div>)}
+            {currentCount < maxCount && !loading && (<div className="flex items-center gap-1.5 text-orange-500"><AlertTriangle className="w-3.5 h-3.5" /><span style={{ fontWeight: 500 }}>排班未满 ({currentCount}/{maxCount})</span></div>)}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors" style={{ fontWeight: 500 }}>取消</button>
-            <button onClick={handleConfirm} disabled={!hasChanges} className={`px-5 py-2 rounded-xl text-xs transition-all duration-200 ${hasChanges ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-200" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`} style={{ fontWeight: 600 }}>确认修改</button>
+            <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style={{ fontWeight: 500 }}>取消</button>
+            <button onClick={handleConfirm} disabled={!hasChanges || loading} className={`px-5 py-2 rounded-xl text-xs transition-all duration-200 ${hasChanges && !loading ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-200" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`} style={{ fontWeight: 600 }}>确认修改</button>
           </div>
         </div>
       </div>
