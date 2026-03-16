@@ -13,6 +13,8 @@ import {
   memberPrefersSlot,
   WeekType,
 } from "../../data/constants";
+import { SlotEditModal } from "./SlotEditModal";
+import { PersonalAdjustmentModal } from "./PersonalAdjustmentModal";
 import {
   apiGenerateSchedule,
   apiGetSchedule,
@@ -173,7 +175,11 @@ export function AdminSchedule() {
   const [scheduleResult, setScheduleResult] = useState<ScheduleResult | null>(null);
   const [generating, setGenerating] = useState(false);
   const [activeWeek, setActiveWeek] = useState<WeekType>("单周");
+  const [editMode, setEditMode] = useState(false);
   const [modifiedSlots, setModifiedSlots] = useState<Set<string>>(new Set());
+  const [modalSlot, setModalSlot] = useState<{ slotKey: string; week: WeekType; day: string; time: string } | null>(null);
+  const [modalMember, setModalMember] = useState<Member | null>(null);
+  const snapshotRef = useRef<ScheduleResult | null>(null);
 
   const assignedCount = scheduleResult ? Object.values(scheduleResult).reduce((s, arr) => s + arr.length, 0) : 0;
   const hasChanges = modifiedSlots.size > 0;
@@ -181,6 +187,20 @@ export function AdminSchedule() {
   useEffect(() => {
     apiGetSchedule().then((r) => { if (r && Object.keys(r).length > 0) setScheduleResult(r); }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (modalMember) {
+          setModalMember(null);
+        } else if (modalSlot) {
+          setModalSlot(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [modalMember, modalSlot]);
 
   const handleGenerate = async () => {
     if (generating) return;
@@ -215,6 +235,159 @@ export function AdminSchedule() {
   };
 
   const handleLogout = () => { logout(); navigate("/admin/login"); };
+
+  const enterEditMode = () => {
+    if (!scheduleResult) return;
+    snapshotRef.current = JSON.parse(JSON.stringify(scheduleResult));
+    setEditMode(true);
+  };
+
+  const exitEditMode = async (save: boolean) => {
+    if (!save) {
+      if (snapshotRef.current) {
+        setScheduleResult(snapshotRef.current);
+        setModifiedSlots(new Set());
+      }
+      setEditMode(false);
+      setModalSlot(null);
+      setModalMember(null);
+      snapshotRef.current = null;
+      return;
+    }
+    // 保存修改到后端
+    if (!scheduleResult || !snapshotRef.current) {
+      setEditMode(false);
+      setModalSlot(null);
+      setModalMember(null);
+      snapshotRef.current = null;
+      return;
+    }
+    const before = snapshotRef.current;
+    const after = scheduleResult;
+    const getStudentId = (m: any): string | null => m?.studentId ?? m?.student_id ?? null;
+    const collectByStudent = (result: ScheduleResult) => {
+      const map = new Map<string, Set<string>>();
+      Object.entries(result).forEach(([slotKey, members]) => {
+        (members as any[]).forEach((m) => {
+          const sid = getStudentId(m);
+          if (!sid) return;
+          if (!map.has(sid)) map.set(sid, new Set());
+          map.get(sid)!.add(slotKey);
+        });
+      });
+      return map;
+    };
+    const beforeMap = collectByStudent(before);
+    const afterMap = collectByStudent(after);
+    const allIds = new Set<string>([...beforeMap.keys(), ...afterMap.keys()]);
+    const changed: string[] = [];
+    for (const sid of allIds) {
+      const bs = beforeMap.get(sid) ?? new Set<string>();
+      const as_ = afterMap.get(sid) ?? new Set<string>();
+      if (bs.size !== as_.size) {
+        changed.push(sid);
+        continue;
+      }
+      let diff = false;
+      for (const k of bs) {
+        if (!as_.has(k)) {
+          diff = true;
+          break;
+        }
+      }
+      if (!diff) {
+        for (const k of as_) {
+          if (!bs.has(k)) {
+            diff = true;
+            break;
+          }
+        }
+      }
+      if (diff) changed.push(sid);
+    }
+    try {
+      await Promise.all(
+        changed.map((sid) =>
+          apiUpdatePersonalAdjustment(sid, { assigned_shift_ids: Array.from(afterMap.get(sid) ?? new Set<string>()) })
+        )
+      );
+      const refreshed = await apiGetSchedule();
+      setScheduleResult(refreshed);
+      setModifiedSlots(new Set());
+      setEditMode(false);
+      setModalSlot(null);
+      setModalMember(null);
+      snapshotRef.current = null;
+    } catch (e) {
+      console.error(e);
+      alert("保存调整到后端失败，请稍后重试。");
+    }
+  };
+
+  const handleRemoveMember = (slotKey: string, memberId: string) => {
+    if (!scheduleResult) return;
+    setScheduleResult((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      next[slotKey] = (next[slotKey] ?? []).filter((m) => m.studentId !== memberId);
+      if (next[slotKey].length === 0) delete next[slotKey];
+      return next;
+    });
+    setModifiedSlots((prev) => new Set(prev).add(slotKey));
+  };
+
+  const handleAddMember = (slotKey: string, member: Member) => {
+    if (!scheduleResult) return;
+    setScheduleResult((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      const current = next[slotKey] ?? [];
+      if (current.length >= MAX_PER_SLOT) return prev;
+      if (current.some((m) => m.studentId === member.studentId)) return prev;
+      next[slotKey] = [...current, member];
+      return next;
+    });
+    setModifiedSlots((prev) => new Set(prev).add(slotKey));
+  };
+
+  const handleMemberClick = (member: Member) => {
+    setModalMember(member);
+  };
+
+  const handlePersonApply = (memberId: string, addedSlots: string[], removedSlots: string[]) => {
+    if (!scheduleResult) return;
+    const member = allMembers.find((m) => m.studentId === memberId);
+    if (!member) return;
+
+    setScheduleResult((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+
+      for (const slotKey of removedSlots) {
+        if (next[slotKey]) {
+          next[slotKey] = next[slotKey].filter((m) => m.studentId !== memberId);
+          if (next[slotKey].length === 0) delete next[slotKey];
+        }
+      }
+
+      for (const slotKey of addedSlots) {
+        if (!next[slotKey]) next[slotKey] = [];
+        if (!next[slotKey].some((m) => m.studentId === memberId)) {
+          next[slotKey] = [...next[slotKey], member];
+        }
+      }
+
+      return next;
+    });
+
+    setModifiedSlots((prev) => {
+      const next = new Set(prev);
+      for (const k of [...addedSlots, ...removedSlots]) {
+        next.add(k);
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -300,17 +473,43 @@ export function AdminSchedule() {
                   <h3 className="text-gray-700" style={{ fontSize: "14px", fontWeight: 600 }}>排班结果</h3>
                   <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
                     {(["单周", "双周"] as WeekType[]).map((w) => (
-                      <button key={w} onClick={() => setActiveWeek(w)}
+                      <button key={w} onClick={() => { setActiveWeek(w); setModalSlot(null); }}
                         className={`px-4 py-1.5 rounded-lg text-xs transition-all duration-200 ${activeWeek === w ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
                         style={{ fontWeight: activeWeek === w ? 600 : 400 }}>{w}</button>
                     ))}
                   </div>
+                  {editMode && (
+                    <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 text-orange-600 px-3 py-1 rounded-full text-xs" style={{ fontWeight: 600 }}>
+                      <Pencil className="w-3 h-3" />编辑模式
+                      {modifiedSlots.size > 0 && <span className="ml-1 bg-orange-200 text-orange-700 px-1.5 rounded-full">{modifiedSlots.size} 处修改</span>}
+                    </div>
+                  )}
+                  {!editMode && modifiedSlots.size > 0 && (
+                    <div className="flex items-center gap-1.5 text-orange-400 text-xs">
+                      <div className="w-1.5 h-1.5 rounded-full bg-orange-400" />{modifiedSlots.size} 处已手动调整
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors" style={{ fontWeight: 500 }}>
+                  {!editMode ? (
+                    <button onClick={enterEditMode} disabled={!scheduleResult} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-orange-50 border border-orange-200 text-orange-600 hover:bg-orange-100 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ fontWeight: 600 }}>
+                      <Pencil className="w-3.5 h-3.5" />手动微调
+                    </button>
+                  ) : (
+                    <>
+                      <button onClick={() => exitEditMode(false)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors" style={{ fontWeight: 500 }}>
+                        <X className="w-3.5 h-3.5" />放弃修改
+                      </button>
+                      <button onClick={() => exitEditMode(true)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-xs transition-colors shadow-sm" style={{ fontWeight: 600 }}>
+                        <Check className="w-3.5 h-3.5" />保存调整
+                      </button>
+                    </>
+                  )}
+                  <div className="w-px h-5 bg-gray-200" />
+                  <button onClick={() => window.print()} disabled={editMode} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ fontWeight: 500 }}>
                     <Printer className="w-3.5 h-3.5" />打印
                   </button>
-                  <button onClick={() => exportCSV(scheduleResult, activeWeek)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs transition-colors shadow-sm shadow-blue-200" style={{ fontWeight: 600 }}>
+                  <button onClick={() => exportCSV(scheduleResult, activeWeek)} disabled={editMode} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs transition-colors shadow-sm shadow-blue-200 disabled:opacity-40 disabled:cursor-not-allowed" style={{ fontWeight: 600 }}>
                     <Download className="w-3.5 h-3.5" />导出 CSV
                   </button>
                 </div>
@@ -324,11 +523,12 @@ export function AdminSchedule() {
                   </div>
                 ))}
                 <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-gray-200" /><span className="text-gray-400 text-xs">空缺 / 不值班</span></div>
+                {!editMode && modifiedSlots.size > 0 && <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-orange-400" /><span className="text-orange-400 text-xs">已手动调整</span></div>}
               </div>
 
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <ScheduleTable result={scheduleResult} week={activeWeek} editMode={false} modifiedSlots={modifiedSlots}
-                  onCellClick={() => {}} />
+                <ScheduleTable result={scheduleResult} week={activeWeek} editMode={editMode} modifiedSlots={modifiedSlots}
+                  onCellClick={(sk, w, d, t) => { if (editMode) setModalSlot({ slotKey: sk, week: w, day: d, time: t }); }} />
               </div>
 
               <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -357,6 +557,32 @@ export function AdminSchedule() {
           )}
         </div>
       </main>
+
+      {/* Layer 1: Slot Edit Modal */}
+      {modalSlot && scheduleResult && (
+        <SlotEditModal
+          week={modalSlot.week}
+          day={modalSlot.day}
+          time={modalSlot.time}
+          slotKey={modalSlot.slotKey}
+          currentMembers={scheduleResult[modalSlot.slotKey] ?? []}
+          scheduleResult={scheduleResult}
+          onRemove={handleRemoveMember}
+          onAdd={handleAddMember}
+          onMemberClick={handleMemberClick}
+          onClose={() => setModalSlot(null)}
+        />
+      )}
+
+      {/* Layer 2: Personal Adjustment Modal */}
+      {modalMember && scheduleResult && (
+        <PersonalAdjustmentModal
+          member={modalMember}
+          scheduleResult={scheduleResult}
+          onApply={handlePersonApply}
+          onClose={() => setModalMember(null)}
+        />
+      )}
     </div>
   );
 }
