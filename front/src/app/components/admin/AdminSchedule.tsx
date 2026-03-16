@@ -172,6 +172,7 @@ export function AdminSchedule() {
   const submitted = allMembers.filter((m) => m.submitted);
   const [scheduleResult, setScheduleResult] = useState<ScheduleResult | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [activeWeek, setActiveWeek] = useState<WeekType>("单周");
   const [modifiedSlots, setModifiedSlots] = useState<Set<string>>(new Set());
 
   const assignedCount = scheduleResult ? Object.values(scheduleResult).reduce((s, arr) => s + arr.length, 0) : 0;
@@ -291,6 +292,62 @@ export function AdminSchedule() {
               <p className="text-gray-500 text-sm">正在根据志愿优先级自动分配班次…</p>
             </div>
           )}
+
+          {scheduleResult && !generating && (
+            <div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <h3 className="text-gray-700" style={{ fontSize: "14px", fontWeight: 600 }}>排班结果</h3>
+                  <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                    {(["单周", "双周"] as WeekType[]).map((w) => (
+                      <button key={w} onClick={() => setActiveWeek(w)}
+                        className={`px-4 py-1.5 rounded-lg text-xs transition-all duration-200 ${activeWeek === w ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                        style={{ fontWeight: activeWeek === w ? 600 : 400 }}>{w}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors" style={{ fontWeight: 500 }}>
+                    <Printer className="w-3.5 h-3.5" />打印
+                  </button>
+                  <button onClick={() => exportCSV(scheduleResult, activeWeek)} className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs transition-colors shadow-sm shadow-blue-200" style={{ fontWeight: 600 }}>
+                    <Download className="w-3.5 h-3.5" />导出 CSV
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap mb-3">
+                {Object.entries(TIME_COLORS).map(([time, tc]) => (
+                  <div key={time} className="flex items-center gap-1.5">
+                    <div className={`w-2.5 h-2.5 rounded-full ${tc.bg}`} />
+                    <span className="text-gray-500 text-xs">{time}</span>
+                  </div>
+                ))}
+                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-gray-200" /><span className="text-gray-400 text-xs">空缺 / 不值班</span></div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <ScheduleTable result={scheduleResult} week={activeWeek} editMode={false} modifiedSlots={modifiedSlots}
+                  onCellClick={() => {}} />
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {TIME_SLOTS.map((time) => {
+                  const tc = TIME_COLORS[time];
+                  const filledSlots = DAYS.filter((day) => !isSlotDisabled(day, time) && (scheduleResult[`${activeWeek}-${day}-${time}`]?.length ?? 0) > 0).length;
+                  const totalSlots = DAYS.filter((day) => !isSlotDisabled(day, time)).length;
+                  return (
+                    <div key={time} className={`${tc.light} rounded-xl p-3 border ${tc.border}`}>
+                      <p className={`text-xs ${tc.text} mb-1`} style={{ fontWeight: 600 }}>{time}</p>
+                      <p className="text-gray-800 text-sm" style={{ fontWeight: 700 }}>{filledSlots} / {totalSlots}</p>
+                      <p className="text-gray-400" style={{ fontSize: "10px" }}>时间段已覆盖</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {!scheduleResult && !generating && (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 flex flex-col items-center gap-3 text-center">
               <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center"><TableProperties className="w-8 h-8 text-gray-300" /></div>
