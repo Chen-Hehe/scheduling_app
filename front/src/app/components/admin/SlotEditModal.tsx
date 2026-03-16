@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useState } from "react";
 import { useMembers } from "../../context/MemberContext";
 import { Member, ScheduleResult } from "../../data/mockData";
@@ -124,8 +125,10 @@ export function SlotEditModal({
             ) : (
               <div className="space-y-2">
                 {currentMembers.map((m) => {
+                  const memberForPref =
+                    allMembers.find((am) => am.studentId === m.studentId) ?? m;
                   const prefers = memberPrefersSlot(
-                    m,
+                    memberForPref,
                     week,
                     day,
                     time,
@@ -133,7 +136,11 @@ export function SlotEditModal({
                   return (
                     <div
                       key={m.studentId}
-                      className="flex items-center justify-between px-3 py-2.5 bg-gray-50 rounded-xl border border-gray-100 group"
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all group ${
+                        prefers
+                          ? "bg-amber-50/50 border-amber-100"
+                          : "bg-gray-50 border-gray-100"
+                      }`}
                     >
                       <button
                         onClick={() => onMemberClick(m)}
@@ -164,7 +171,7 @@ export function SlotEditModal({
                             </span>
                             {prefers && (
                               <span
-                                className="text-amber-500 text-xs"
+                                className="shrink-0 text-amber-500 text-xs"
                                 title="该成员填写了此志愿"
                               >
                                 ★
