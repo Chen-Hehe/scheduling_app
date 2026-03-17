@@ -13,6 +13,7 @@ export interface Member {
   submitted: boolean;
   shifts: MemberShift[]; // ordered by priority
   submitTime?: string;
+  is_leader?: boolean; // true if this member is the designated leader for this slot
 }
 
 export const ALL_MEMBERS: Member[] = [

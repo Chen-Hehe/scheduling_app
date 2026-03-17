@@ -43,6 +43,8 @@ import {
   Plus,
   ChevronRight,
   CheckCircle2,
+  Crown,
+  Info,
 } from "lucide-react";
 
 
@@ -101,19 +103,38 @@ function ScheduleTable({
                         <div className="flex items-center justify-center h-10"><span className="text-gray-200 text-xs">—</span></div>
                       ) : (
                         <div className="space-y-1">
+                          {/* Gap badges */}
+                          {assigned.length > 0 && !assigned.some((m) => m.is_leader) && (
+                            <div className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-red-100 border border-red-200 text-red-600" style={{ fontSize: "9px", fontWeight: 700 }}>
+                              <AlertTriangle className="w-2.5 h-2.5 shrink-0" />缺组长
+                            </div>
+                          )}
+                          {assigned.length > 0 && assigned.every((m) => m.position === "副部长" || m.position === "部长" || m.position === "主席" || m.position === "副主席") && (
+                            <div className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-gray-100 border border-gray-200 text-gray-500" style={{ fontSize: "9px", fontWeight: 600 }}>
+                              <Info className="w-2.5 h-2.5 shrink-0" />建议补充干事
+                            </div>
+                          )}
                           {assigned.map((m) => (
-                            <div key={`${slotKey}-${m.studentId}`} className={`flex items-center gap-1 px-2 py-1 rounded-lg ${tc.light} border ${tc.border}`}>
-                              <div className={`w-5 h-5 rounded-full ${tc.bg} flex items-center justify-center shrink-0`}>
+                            <div key={`${slotKey}-${m.studentId}`} className={`flex items-center gap-1 px-2 py-1 rounded-lg ${m.is_leader ? "bg-amber-50 border border-amber-300" : `${tc.light} border ${tc.border}`}`}>
+                              <div className={`w-5 h-5 rounded-full ${m.is_leader ? "bg-amber-400" : tc.bg} flex items-center justify-center shrink-0`}>
                                 <span className="text-white" style={{ fontSize: "9px", fontWeight: 700 }}>{m.name[0]}</span>
                               </div>
                               <div className="flex-1 text-left min-w-0">
-                                <p className={`text-xs ${tc.text} truncate`} style={{ fontWeight: 600, lineHeight: 1.2 }}>{m.name}</p>
+                                <div className="flex items-center gap-0.5">
+                                  {m.is_leader && <Crown className="w-2.5 h-2.5 text-amber-500 shrink-0" />}
+                                  <p className={`text-xs ${m.is_leader ? "text-amber-700" : tc.text} truncate`} style={{ fontWeight: 600, lineHeight: 1.2 }}>{m.name}</p>
+                                </div>
                                 <p className="text-gray-400 truncate" style={{ fontSize: "9px" }}>{m.position}</p>
                               </div>
                             </div>
                           ))}
                           {assigned.length === 0 && !editMode && (
-                            <div className="flex items-center justify-center h-10"><span className="text-gray-300 text-xs">空缺</span></div>
+                            <div className="flex flex-col items-center justify-center h-10 gap-0.5">
+                              <span className="text-gray-300 text-xs">空缺</span>
+                              <div className="flex items-center gap-0.5 text-red-300" style={{ fontSize: "9px" }}>
+                                <AlertTriangle className="w-2.5 h-2.5" />缺组长
+                              </div>
+                            </div>
                           )}
                           {editMode && (
                             <div className="flex items-center justify-center py-1">

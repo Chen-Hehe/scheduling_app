@@ -111,6 +111,7 @@ export async function apiGenerateSchedule() {
 
 export async function apiGetSchedule() {
   // 后端返回的结构已与 ScheduleResult 兼容：key 为 slotKey，值为 Member[]
+  // 每个成员包含 is_leader 字段标识组长
   return request<ScheduleResult>(`/api/admin/schedule`);
 }
 

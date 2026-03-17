@@ -55,13 +55,14 @@ class RosterStatusResponse(BaseModel):
 
 class ScheduleMember(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    
+
     student_id: str = Field(alias="studentId")
     name: str
     department: str
     position: str
     submitted: bool
     shifts: List[MemberShift] = []
+    is_leader: bool = False
 
 
 class ScheduleResultResponse(RootModel[Dict[str, List[ScheduleMember]]]):

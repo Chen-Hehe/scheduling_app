@@ -86,6 +86,7 @@ class Schedule(Base):
     )
 
     assigned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_leader = Column(Boolean, nullable=False, default=False)
 
     member = relationship("Member", back_populates="schedules")
     shift = relationship("Shift", back_populates="schedules")

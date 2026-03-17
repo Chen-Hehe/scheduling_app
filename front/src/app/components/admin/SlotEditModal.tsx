@@ -14,6 +14,7 @@ import {
   Search,
   Plus,
   ChevronRight,
+  Crown,
 } from "lucide-react";
 
 export function SlotEditModal({
@@ -154,9 +155,14 @@ export function SlotEditModal({
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
+                            {m.is_leader && (
+                              <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" title="组长" />
+                            )}
                             <span
-                              className="text-gray-700 text-sm underline decoration-dotted underline-offset-2"
-                              style={{ fontWeight: 500 }}
+                              className={`text-sm underline decoration-dotted underline-offset-2 ${
+                                m.is_leader ? "text-amber-700" : "text-gray-700"
+                              }`}
+                              style={{ fontWeight: m.is_leader ? 700 : 500 }}
                             >
                               {m.name}
                             </span>

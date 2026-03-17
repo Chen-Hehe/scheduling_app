@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
-from math import ceil
 from typing import Dict, List, Tuple, Optional
 
 import pandas as pd
@@ -21,7 +20,7 @@ from .schemas import (
     ScheduleResultResponse,
     PersonalAdjustmentData,
     PersonalAdjustmentUpdateRequest,
- )
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -222,6 +221,8 @@ def roster_status(db: Session = Depends(get_db)):
     return RosterStatusResponse(submitted_members=submitted_members, unsubmitted_members=unsubmitted_members)
 
 
+# ─── Helper functions ─────────────────────────────────────────────────────────
+
 def _max_count_by_position(position: str) -> int:
     pos = (position or "").strip()
     if pos == "干事":
@@ -238,35 +239,67 @@ def _position_category(position: str) -> str:
     return "officers"
 
 
+def _is_vice_minister(position: str) -> bool:
+    """副部长：优先作为班次组长。"""
+    return (position or "").strip() == "副部长"
+
+
+def _is_minister(position: str) -> bool:
+    """主席/副主席/部长：备选组长。"""
+    return (position or "").strip() in ("主席", "副主席", "部长")
+
+
 def _pick_candidate_for_shift(
     shift_id: str,
     candidates: List[models.Member],
     pref_rank_map: Dict[Tuple[str, str], int],
     member_assigned_count: Dict[str, int],
     member_capacity: Dict[str, int],
+    already_assigned: Optional[List[str]] = None,
 ) -> Optional[models.Member]:
+    """
+    从 candidates 中选出最优候选人：
+    - 必须报名了该班次（pref_rank_map 中存在）
+    - 排班次数未达上限
+    - 未已分配到该班次
+    - 排序依据：(已排次数 ASC, 志愿排名 ASC, 学号 ASC) ── 优先选最闲的人
+    """
+    if already_assigned is None:
+        already_assigned = []
+    assigned_set = set(already_assigned)
     best: Optional[models.Member] = None
     best_score: Optional[Tuple[int, int, str]] = None
     for m in candidates:
+        if m.student_id in assigned_set:
+            continue
         if member_assigned_count[m.student_id] >= member_capacity[m.student_id]:
             continue
         rank = pref_rank_map.get((m.student_id, shift_id))
         if rank is None:
             continue
-        score = (rank, member_assigned_count[m.student_id], m.student_id)
+        score = (member_assigned_count[m.student_id], rank, m.student_id)
         if best_score is None or score < best_score:
             best_score = score
             best = m
     return best
 
 
+# ─── Schedule generation ──────────────────────────────────────────────────────
+
 @app.post("/api/admin/schedule/generate", response_model=MessageResponse)
 def generate_schedule(db: Session = Depends(get_db)):
     """
-    清空 Schedule 表后生成排班：
-    - 部长/副部最多 2 个班，干事最多 1 个班
-    - 尽量优先满足低 rank 志愿
-    - 尽量保证班次均匀，且尽量不空班
+    两阶段贪心排班算法：
+
+    阶段一（组长优先 Leader-First）：
+      遍历所有班次，为每个班次强制分配 1 名组长（is_leader=True）。
+      - 优先从报名该班次的副部长中，选已排次数最少者。
+      - 无可用副部，则从部长（含主席/副主席）中走同样逻辑。
+      - 均衡原则：排序依据 (已排次数 ASC, 志愿排名 ASC, 学号 ASC)。
+
+    阶段二（填充普通成员）：
+      - 遍历班次，补充普通成员直至达到 min_required 人数下限。
+      - 再次遍历所有成员，将剩余配额填入其志愿班次（均衡分配）。
     """
     members: List[models.Member] = (
         db.query(models.Member)
@@ -291,43 +324,68 @@ def generate_schedule(db: Session = Depends(get_db)):
         .order_by(models.Preference.student_id.asc(), models.Preference.preference_rank.asc())
         .all()
     )
-    pref_rank_map: Dict[Tuple[str, str], int] = {(p.student_id, p.shift_id): p.preference_rank for p in prefs}
-    member_capacity: Dict[str, int] = {m.student_id: _max_count_by_position(m.position) for m in members}
+    pref_rank_map: Dict[Tuple[str, str], int] = {
+        (p.student_id, p.shift_id): p.preference_rank for p in prefs
+    }
+    member_capacity: Dict[str, int] = {
+        m.student_id: _max_count_by_position(m.position) for m in members
+    }
     member_assigned_count: Dict[str, int] = {m.student_id: 0 for m in members}
-    shift_assignees: Dict[str, List[str]] = {s.shift_id: [] for s in shifts}
+
+    # shift_assignees: shift_id -> list of (student_id, is_leader)
+    shift_assignees: Dict[str, List[Tuple[str, bool]]] = {s.shift_id: [] for s in shifts}
+
+    vice_ministers = [m for m in members if _is_vice_minister(m.position)]
+    ministers = [m for m in members if _is_minister(m.position)]
 
     db.query(models.Schedule).delete()
     db.commit()
 
-    # Step 1: 尽量让每个班次至少 1 人（不空班）
+    # ── 阶段一：为每个班次强制分配 1 名组长 ──────────────────────────────────
     for s in shifts:
-        cand = _pick_candidate_for_shift(s.shift_id, members, pref_rank_map, member_assigned_count, member_capacity)
-        if cand is None:
-            continue
-        shift_assignees[s.shift_id].append(cand.student_id)
-        member_assigned_count[cand.student_id] += 1
+        
+        assigned_ids = [aid for aid, _ in shift_assignees[s.shift_id]]
+        leader = _pick_candidate_for_shift(
+            s.shift_id, vice_ministers, pref_rank_map,
+            member_assigned_count, member_capacity, assigned_ids,
+        )
+        if leader is None:
+            leader = _pick_candidate_for_shift(
+                s.shift_id, ministers, pref_rank_map,
+                member_assigned_count, member_capacity, assigned_ids,
+            )
+        if leader is not None:
+            shift_assignees[s.shift_id].append((leader.student_id, True))
+            member_assigned_count[leader.student_id] += 1
 
-    # Step 2: 按 min_required 填满最低人数
+    # Phase 2: fill up to min_required
     for s in shifts:
         while len(shift_assignees[s.shift_id]) < (s.min_required or 1):
-            cand = _pick_candidate_for_shift(s.shift_id, members, pref_rank_map, member_assigned_count, member_capacity)
+            assigned_ids = [aid for aid, _ in shift_assignees[s.shift_id]]
+            cand = _pick_candidate_for_shift(
+                s.shift_id, members, pref_rank_map,
+                member_assigned_count, member_capacity, assigned_ids,
+            )
             if cand is None:
                 break
-            if cand.student_id in shift_assignees[s.shift_id]:
-                break
-            shift_assignees[s.shift_id].append(cand.student_id)
+            shift_assignees[s.shift_id].append((cand.student_id, False))
             member_assigned_count[cand.student_id] += 1
 
-    # Step 3: 继续填充，无视班次人数限制
+    # Phase 2b: use remaining quota
     for m in members:
         while member_assigned_count[m.student_id] < member_capacity[m.student_id]:
-            m_prefs = [(sid, rank) for (msid, sid), rank in pref_rank_map.items() if msid == m.student_id]
-            m_prefs.sort(key=lambda x: x[1])
+            m_prefs = [
+                (s_id, rank)
+                for (msid, s_id), rank in pref_rank_map.items()
+                if msid == m.student_id
+            ]
+            m_prefs.sort(key=lambda x: (x[1], x[0]))
             assigned = False
-            for sid, _rank in m_prefs:
-                if m.student_id in shift_assignees.get(sid, []):
+            for s_id, _rank in m_prefs:
+                already = [aid for aid, _ in shift_assignees.get(s_id, [])]
+                if m.student_id in already:
                     continue
-                shift_assignees.setdefault(sid, []).append(m.student_id)
+                shift_assignees.setdefault(s_id, []).append((m.student_id, False))
                 member_assigned_count[m.student_id] += 1
                 assigned = True
                 break
@@ -335,9 +393,14 @@ def generate_schedule(db: Session = Depends(get_db)):
                 break
 
     now = datetime.now()
-    for sid, student_ids in shift_assignees.items():
-        for st in student_ids:
-            db.add(models.Schedule(student_id=st, shift_id=sid, assigned_at=now))
+    for s_id, assignees in shift_assignees.items():
+        for student_id, is_leader in assignees:
+            db.add(models.Schedule(
+                student_id=student_id,
+                shift_id=s_id,
+                assigned_at=now,
+                is_leader=is_leader,
+            ))
     db.commit()
     return MessageResponse(message="排班生成成功")
 
@@ -348,15 +411,19 @@ def get_schedule(db: Session = Depends(get_db)):
     if not rows:
         return {}
     member_map: Dict[str, models.Member] = {m.student_id: m for m in db.query(models.Member).all()}
-    result: Dict[str, List[Dict[str, str]]] = {}
+    result: Dict[str, List[Dict]] = {}
     for r in rows:
         m = member_map.get(r.student_id)
         if not m:
             continue
         result.setdefault(r.shift_id, []).append({
-            "studentId": m.student_id, "name": m.name,
-            "department": m.department, "position": m.position,
-            "submitted": m.has_submitted, "shifts": [],
+            "studentId": m.student_id,
+            "name": m.name,
+            "department": m.department,
+            "position": m.position,
+            "submitted": m.has_submitted,
+            "shifts": [],
+            "is_leader": r.is_leader,
         })
     return result
 
@@ -403,9 +470,11 @@ def get_personal_adjustment(student_id: str, db: Session = Depends(get_db)):
         cat = _position_category(m2.position)
         headcount_map[row.shift_id][cat] += 1
     related_shifts_payload: List[Dict] = []
-    def sort_key(sid: str) -> Tuple[int, str]:
+
+    def sort_key(sid: str):
         rank = pref_rank_map.get(sid)
-        return (rank if rank is not None else 1_000_000, sid)
+        return (rank if rank is not None else 1000000, sid)
+
     for sid in sorted(related_shift_ids, key=sort_key):
         shift = shift_map.get(sid)
         if shift:
@@ -437,10 +506,22 @@ def update_personal_adjustment(
             week, day, ts = _parse_shift_id(sid)
             db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=ts, min_required=1))
     db.commit()
+    existing_leader_shifts = {
+        r.shift_id for r in
+        db.query(models.Schedule).filter(
+            models.Schedule.student_id == student_id,
+            models.Schedule.is_leader.is_(True),
+        ).all()
+    }
     db.query(models.Schedule).filter(models.Schedule.student_id == student_id).delete()
     now = datetime.now()
     for sid in payload.assigned_shift_ids:
-        db.add(models.Schedule(student_id=student_id, shift_id=sid, assigned_at=now))
+        db.add(models.Schedule(
+            student_id=student_id,
+            shift_id=sid,
+            assigned_at=now,
+            is_leader=(sid in existing_leader_shifts),
+        ))
     db.commit()
     return MessageResponse(message="个人排班已更新")
 
