@@ -144,7 +144,7 @@ export function PersonalAdjustmentModal({ member, scheduleResult, onApply, onClo
                   const currentSlotMembers = scheduleResult[shift.slotKey] ?? [];
                   const wasAssigned = currentSlotMembers.some((m) => m.studentId === member.studentId);
                   let adjustedHc = { ...shift.headcount };
-                  const isMinister = member.position === "部长" || member.position === "主席" || member.position === "副主席";
+                  const isMinister = member.position === "主席" || member.position === "副主席" || member.position === "部长";
                   const isVice = member.position === "副部长";
                   if (shift.isAssigned && !wasAssigned) {
                     if (isMinister) adjustedHc.ministers++;

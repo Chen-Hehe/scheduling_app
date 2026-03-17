@@ -306,19 +306,16 @@ def roster_status(db: Session = Depends(get_db)):
 
 def _max_count_by_position(position: str) -> int:
     pos = (position or "").strip()
-    if pos in ("部长", "部长团"):
-        return 2
-    if pos in ("副部长",):
-        return 2
-    # 默认按“干事”为 1
-    return 1
+    if pos == "干事":
+        return 1
+    return 2
 
 
 def _position_category(position: str) -> str:
     pos = (position or "").strip()
-    if pos in ("部长", "部长团"):
+    if pos in ("主席", "副主席", "部长"):
         return "ministers"
-    if pos in ("副部长", "副主席"):
+    if pos == "副部长":
         return "vice_ministers"
     return "officers"
 

@@ -93,11 +93,7 @@ export function getHeadcount(members: Member[]) {
   let viceMinistersCount = 0;
   let officers = 0;
   for (const m of members) {
-    if (
-      m.position === "部长" ||
-      m.position === "主席" ||
-      m.position === "副主席"
-    ) {
+    if (m.position === "主席" || m.position === "副主席" || m.position === "部长") {
       ministers++;
     } else if (m.position === "副部长") {
       viceMinistersCount++;
