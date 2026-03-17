@@ -94,6 +94,7 @@ class PersonalAdjustmentData(BaseModel):
 
 class PersonalAdjustmentUpdateRequest(BaseModel):
     assigned_shift_ids: List[str]
+    leader_shift_ids: List[str] = []  # shift_ids where this person is the leader
 
 
 class MinRequiredConfig(BaseModel):

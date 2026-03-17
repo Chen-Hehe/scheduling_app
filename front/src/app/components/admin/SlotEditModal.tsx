@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useState } from "react";
 import { useMembers } from "../../context/MemberContext";
-import { Member, ScheduleResult } from "../../data/mockData";
+import { Member } from "../../data/mockData";
 import {
   TIME_COLORS,
   POSITION_COLORS,
@@ -23,9 +23,9 @@ export function SlotEditModal({
   time,
   slotKey,
   currentMembers,
-  scheduleResult,
   onRemove,
   onAdd,
+  onSetLeader,
   onMemberClick,
   onClose,
 }: {
@@ -34,9 +34,9 @@ export function SlotEditModal({
   time: string;
   slotKey: string;
   currentMembers: Member[];
-  scheduleResult: ScheduleResult;
   onRemove: (slotKey: string, memberId: string) => void;
   onAdd: (slotKey: string, member: Member) => void;
+  onSetLeader: (slotKey: string, memberId: string) => void;
   onMemberClick: (member: Member) => void;
   onClose: () => void;
 }) {
@@ -186,14 +186,33 @@ export function SlotEditModal({
                         </div>
                         <ChevronRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
                       </button>
-                      <button
-                        onClick={() => onRemove(slotKey, m.studentId)}
-                        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-600 text-xs transition-colors ml-2"
-                        style={{ fontWeight: 500 }}
-                      >
-                        <X className="w-3 h-3" />
-                        移除
-                      </button>
+                      <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                        {!m.is_leader && (m.position === "副部长" || m.position === "部长" || m.position === "主席" || m.position === "副主席") && (
+                          <button
+                            onClick={() => onSetLeader(slotKey, m.studentId)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 hover:text-amber-700 text-xs transition-colors"
+                            style={{ fontWeight: 500 }}
+                            title="设为本班次组长"
+                          >
+                            <Crown className="w-3 h-3" />
+                            设为组长
+                          </button>
+                        )}
+                        {m.is_leader && (
+                          <span className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-xs" style={{ fontWeight: 600 }}>
+                            <Crown className="w-3 h-3" />
+                            组长
+                          </span>
+                        )}
+                        <button
+                          onClick={() => onRemove(slotKey, m.studentId)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-600 text-xs transition-colors"
+                          style={{ fontWeight: 500 }}
+                        >
+                          <X className="w-3 h-3" />
+                          移除
+                        </button>
+                      </div>
                     </div>
                   );
                 })}

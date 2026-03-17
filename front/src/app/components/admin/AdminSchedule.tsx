@@ -109,12 +109,12 @@ function ScheduleTable({
                               <AlertTriangle className="w-2.5 h-2.5 shrink-0" />缺组长
                             </div>
                           )}
-                          {assigned.length > 0 && assigned.every((m) => m.position === "副部长" || m.position === "部长" || m.position === "主席" || m.position === "副主席") && (
+                          {assigned.length > 0 && time !== "第三四节" && assigned.every((m) => m.position === "副部长" || m.position === "部长" || m.position === "主席" || m.position === "副主席") && (
                             <div className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-gray-100 border border-gray-200 text-gray-500" style={{ fontSize: "9px", fontWeight: 600 }}>
                               <Info className="w-2.5 h-2.5 shrink-0" />建议补充干事
                             </div>
                           )}
-                          {assigned.map((m) => (
+                          {[...assigned].sort((a, b) => (b.is_leader ? 1 : 0) - (a.is_leader ? 1 : 0)).map((m) => (
                             <div key={`${slotKey}-${m.studentId}`} className={`flex items-center gap-1 px-2 py-1 rounded-lg ${m.is_leader ? "bg-amber-50 border border-amber-300" : `${tc.light} border ${tc.border}`}`}>
                               <div className={`w-5 h-5 rounded-full ${m.is_leader ? "bg-amber-400" : tc.bg} flex items-center justify-center shrink-0`}>
                                 <span className="text-white" style={{ fontSize: "9px", fontWeight: 700 }}>{m.name[0]}</span>
@@ -342,9 +342,23 @@ export function AdminSchedule() {
       if (diff) changed.push(sid);
     }
     try {
+      // Build leader_shift_ids: for each changed student, find slots where they are is_leader in `after`
+      const leaderSlotsByStudent = new Map<string, string[]>();
+      Object.entries(after).forEach(([slotKey, members]) => {
+        (members as any[]).forEach((m) => {
+          const sid = m?.studentId ?? m?.student_id;
+          if (sid && m.is_leader) {
+            if (!leaderSlotsByStudent.has(sid)) leaderSlotsByStudent.set(sid, []);
+            leaderSlotsByStudent.get(sid)!.push(slotKey);
+          }
+        });
+      });
       await Promise.all(
         changed.map((sid) =>
-          apiUpdatePersonalAdjustment(sid, { assigned_shift_ids: Array.from(afterMap.get(sid) ?? new Set<string>()) })
+          apiUpdatePersonalAdjustment(sid, {
+            assigned_shift_ids: Array.from(afterMap.get(sid) ?? new Set<string>()),
+            leader_shift_ids: leaderSlotsByStudent.get(sid) ?? [],
+          })
         )
       );
       const refreshed = await apiGetSchedule();
@@ -367,6 +381,20 @@ export function AdminSchedule() {
       const next = { ...prev };
       next[slotKey] = (next[slotKey] ?? []).filter((m) => m.studentId !== memberId);
       if (next[slotKey].length === 0) delete next[slotKey];
+      return next;
+    });
+    setModifiedSlots((prev) => new Set(prev).add(slotKey));
+  };
+
+  const handleSetLeader = (slotKey: string, memberId: string) => {
+    if (!scheduleResult) return;
+    setScheduleResult((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      next[slotKey] = (next[slotKey] ?? []).map((m) => ({
+        ...m,
+        is_leader: m.studentId === memberId,
+      }));
       return next;
     });
     setModifiedSlots((prev) => new Set(prev).add(slotKey));
@@ -623,9 +651,9 @@ export function AdminSchedule() {
           time={modalSlot.time}
           slotKey={modalSlot.slotKey}
           currentMembers={scheduleResult[modalSlot.slotKey] ?? []}
-          scheduleResult={scheduleResult}
           onRemove={handleRemoveMember}
           onAdd={handleAddMember}
+          onSetLeader={handleSetLeader}
           onMemberClick={handleMemberClick}
           onClose={() => setModalSlot(null)}
         />

@@ -506,13 +506,17 @@ def update_personal_adjustment(
             week, day, ts = _parse_shift_id(sid)
             db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=ts, min_required=1))
     db.commit()
-    existing_leader_shifts = {
-        r.shift_id for r in
-        db.query(models.Schedule).filter(
-            models.Schedule.student_id == student_id,
-            models.Schedule.is_leader.is_(True),
-        ).all()
-    }
+    # Use explicitly provided leader_shift_ids if given, else preserve existing
+    if payload.leader_shift_ids:
+        leader_set = set(payload.leader_shift_ids)
+    else:
+        leader_set = {
+            r.shift_id for r in
+            db.query(models.Schedule).filter(
+                models.Schedule.student_id == student_id,
+                models.Schedule.is_leader.is_(True),
+            ).all()
+        }
     db.query(models.Schedule).filter(models.Schedule.student_id == student_id).delete()
     now = datetime.now()
     for sid in payload.assigned_shift_ids:
@@ -520,7 +524,7 @@ def update_personal_adjustment(
             student_id=student_id,
             shift_id=sid,
             assigned_at=now,
-            is_leader=(sid in existing_leader_shifts),
+            is_leader=(sid in leader_set),
         ))
     db.commit()
     return MessageResponse(message="个人排班已更新")

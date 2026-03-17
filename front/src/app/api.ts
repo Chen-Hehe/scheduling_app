@@ -142,6 +142,7 @@ export interface PersonalAdjustmentData {
 
 export interface PersonalAdjustmentUpdateRequest {
   assigned_shift_ids: string[];
+  leader_shift_ids?: string[]; // shift_ids where this person is the leader
 }
 
 export async function apiGetPersonalAdjustment(studentId: string) {
