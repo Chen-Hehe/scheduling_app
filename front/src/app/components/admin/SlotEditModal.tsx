@@ -5,7 +5,6 @@ import { Member, ScheduleResult } from "../../data/mockData";
 import {
   TIME_COLORS,
   POSITION_COLORS,
-  MAX_PER_SLOT,
   timeRange,
   memberPrefersSlot,
   WeekType,
@@ -64,8 +63,6 @@ export function SlotEditModal({
     return ap - bp;
   });
 
-  const isFull = currentMembers.length >= MAX_PER_SLOT;
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Overlay */}
@@ -94,8 +91,7 @@ export function SlotEditModal({
                 </h3>
               </div>
               <p className="text-gray-400 text-xs">
-                {timeRange(time)} · 已安排{" "}
-                {currentMembers.length}/{MAX_PER_SLOT} 人
+                {timeRange(time)} · 已安排 {currentMembers.length} 人
               </p>
             </div>
             <button
@@ -207,11 +203,6 @@ export function SlotEditModal({
                 style={{ fontWeight: 600 }}
               >
                 可添加人员
-                {isFull && (
-                  <span className="ml-2 text-orange-500">
-                    (已满 {MAX_PER_SLOT} 人)
-                  </span>
-                )}
               </p>
               <div className="flex items-center gap-1.5 text-gray-400 text-xs">
                 <span className="text-amber-500">★</span> =
@@ -249,11 +240,9 @@ export function SlotEditModal({
                     <div
                       key={m.studentId}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl transition-all ${
-                        isFull
-                          ? "opacity-40 bg-gray-50"
-                          : prefers
-                            ? "bg-amber-50/50 border border-amber-100"
-                            : "bg-gray-50 border border-gray-100"
+                        prefers
+                          ? "bg-amber-50/50 border border-amber-100"
+                          : "bg-gray-50 border border-gray-100"
                       }`}
                     >
                       <button
@@ -302,16 +291,14 @@ export function SlotEditModal({
                         </div>
                         <ChevronRight className="w-3.5 h-3.5 text-gray-300 shrink-0" />
                       </button>
-                      {!isFull && (
-                        <button
-                          onClick={() => onAdd(slotKey, m)}
-                          className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-500 hover:text-blue-600 text-xs transition-colors"
-                          style={{ fontWeight: 500 }}
-                        >
-                          <Plus className="w-3 h-3" />
-                          添加
-                        </button>
-                      )}
+                      <button
+                        onClick={() => onAdd(slotKey, m)}
+                        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-500 hover:text-blue-600 text-xs transition-colors"
+                        style={{ fontWeight: 500 }}
+                      >
+                        <Plus className="w-3 h-3" />
+                        添加
+                      </button>
                     </div>
                   );
                 })

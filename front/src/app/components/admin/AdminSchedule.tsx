@@ -7,7 +7,6 @@ import {
   TIME_COLORS,
   POSITION_COLORS,
   ROLE_MAX_COUNT,
-  MAX_PER_SLOT,
   isSlotDisabled,
   timeRange,
   memberPrefersSlot,
@@ -114,15 +113,9 @@ function ScheduleTable({
                           {assigned.length === 0 && !editMode && (
                             <div className="flex items-center justify-center h-10"><span className="text-gray-300 text-xs">空缺</span></div>
                           )}
-                          {editMode && assigned.length < MAX_PER_SLOT && (
+                          {editMode && (
                             <div className="flex items-center justify-center py-1">
                               <div className="flex items-center gap-1 text-blue-400 text-xs"><Pencil className="w-3 h-3" />点击编辑</div>
-                            </div>
-                          )}
-                          {editMode && assigned.length >= MAX_PER_SLOT && (
-                            <div className="flex items-center justify-center gap-1 py-0.5">
-                              <Check className="w-3 h-3 text-gray-300" />
-                              <span className="text-gray-300" style={{ fontSize: "10px" }}>已满</span>
                             </div>
                           )}
                           {isModified && !editMode && (
@@ -342,7 +335,6 @@ export function AdminSchedule() {
       if (!prev) return prev;
       const next = { ...prev };
       const current = next[slotKey] ?? [];
-      if (current.length >= MAX_PER_SLOT) return prev;
       if (current.some((m) => m.studentId === member.studentId)) return prev;
       next[slotKey] = [...current, member];
       return next;
@@ -432,7 +424,7 @@ export function AdminSchedule() {
                 <div>
                   <h3 className="text-gray-800 mb-1" style={{ fontSize: "15px", fontWeight: 700 }}>一键自动排班</h3>
                   <p className="text-gray-400 text-sm leading-relaxed">
-                    系统将根据 <span className="text-blue-500" style={{ fontWeight: 600 }}>{submitted.length} 名</span> 成员的志愿优先级，自动分配最优班次组合。每个时间段最多分配 {MAX_PER_SLOT} 人。
+                    系统将根据 <span className="text-blue-500" style={{ fontWeight: 600 }}>{submitted.length} 名</span> 成员的志愿优先级，自动分配最优班次组合。
                   </p>
                   {scheduleResult && (
                     <div className="flex items-center gap-1.5 mt-2">

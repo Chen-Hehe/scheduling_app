@@ -423,11 +423,7 @@ def generate_schedule(db: Session = Depends(get_db)):
             shift_assignees[s.shift_id].append(cand.student_id)
             member_assigned_count[cand.student_id] += 1
 
-    # Step 3: 平衡填充到一个“均衡上限”
-    total_capacity = sum(member_capacity.values())
-    avg_cap = ceil(total_capacity / max(len(shifts), 1))
-    shift_cap: Dict[str, int] = {s.shift_id: max(s.min_required or 1, avg_cap) for s in shifts}
-
+    # Step 3: 继续填充，无视班次人数限制
     for m in members:
         while member_assigned_count[m.student_id] < member_capacity[m.student_id]:
             # 取该成员的志愿按 rank 排序
@@ -436,8 +432,6 @@ def generate_schedule(db: Session = Depends(get_db)):
             assigned = False
             for sid, _rank in m_prefs:
                 if m.student_id in shift_assignees.get(sid, []):
-                    continue
-                if len(shift_assignees.get(sid, [])) >= shift_cap.get(sid, avg_cap):
                     continue
                 shift_assignees.setdefault(sid, []).append(m.student_id)
                 member_assigned_count[m.student_id] += 1

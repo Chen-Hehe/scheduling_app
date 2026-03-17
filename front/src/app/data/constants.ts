@@ -71,8 +71,6 @@ export const ROLE_MAX_COUNT: Record<string, number> = {
   干事: 1,
 };
 
-export const MAX_PER_SLOT = 2;
-
 // ─── Shared helper functions ──────────────────────────────────────────────────
 
 export function isSlotDisabled(day: string, time: string) {
