@@ -171,27 +171,3 @@ export type SlotKey = string; // `${week}-${day}-${time}`
 export interface ScheduleResult {
   [slotKey: string]: Member[];
 }
-
-// Simple greedy scheduling: assign each person to their top-priority available slot
-// Max 1 person per slot (can be adjusted)
-export function generateSchedule(members: Member[], maxPerSlot = 2): ScheduleResult {
-  const result: ScheduleResult = {};
-  const slotCount: Record<string, number> = {};
-
-  const submitted = members.filter((m) => m.submitted);
-
-  for (const member of submitted) {
-    for (const shift of member.shifts) {
-      const key = `${shift.week}-${shift.day}-${shift.time}`;
-      const count = slotCount[key] ?? 0;
-      if (count < maxPerSlot) {
-        if (!result[key]) result[key] = [];
-        result[key].push(member);
-        slotCount[key] = count + 1;
-        break; // assigned, move to next person
-      }
-    }
-  }
-
-  return result;
-}
