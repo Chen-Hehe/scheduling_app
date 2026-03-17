@@ -94,3 +94,7 @@ class PersonalAdjustmentData(BaseModel):
 class PersonalAdjustmentUpdateRequest(BaseModel):
     assigned_shift_ids: List[str]
 
+
+class MinRequiredConfig(BaseModel):
+    min_required: int
+

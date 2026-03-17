@@ -19,6 +19,8 @@ import {
   apiGetSchedule,
   apiGetPersonalAdjustment,
   apiUpdatePersonalAdjustment,
+  apiGetGlobalMinRequired,
+  apiUpdateGlobalMinRequired,
   PersonalAdjustmentData,
 } from "../../api";
 import {
@@ -172,6 +174,8 @@ export function AdminSchedule() {
   const [modifiedSlots, setModifiedSlots] = useState<Set<string>>(new Set());
   const [modalSlot, setModalSlot] = useState<{ slotKey: string; week: WeekType; day: string; time: string } | null>(null);
   const [modalMember, setModalMember] = useState<Member | null>(null);
+  const [globalMinReq, setGlobalMinReq] = useState<number>(1);
+  const [savingMinReq, setSavingMinReq] = useState(false);
   const snapshotRef = useRef<ScheduleResult | null>(null);
 
   const assignedCount = scheduleResult ? Object.values(scheduleResult).reduce((s, arr) => s + arr.length, 0) : 0;
@@ -179,6 +183,7 @@ export function AdminSchedule() {
 
   useEffect(() => {
     apiGetSchedule().then((r) => { if (r && Object.keys(r).length > 0) setScheduleResult(r); }).catch(() => {});
+    apiGetGlobalMinRequired().then((r) => setGlobalMinReq(r.min_required)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -194,6 +199,23 @@ export function AdminSchedule() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [modalMember, modalSlot]);
+
+  const handleSaveMinReq = async () => {
+    setSavingMinReq(true);
+    try {
+      await apiUpdateGlobalMinRequired({ min_required: globalMinReq });
+      // Simple inline toast via a temporary DOM alert alternative
+      const toast = document.createElement("div");
+      toast.textContent = "✓ 全局班次最少人数已保存";
+      toast.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15);animation:fadeIn .2s ease";
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2500);
+    } catch (e) {
+      alert("保存失败：" + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSavingMinReq(false);
+    }
+  };
 
   const handleGenerate = async () => {
     if (generating) return;
@@ -439,16 +461,38 @@ export function AdminSchedule() {
                   )}
                 </div>
               </div>
-              <button onClick={handleGenerate} disabled={generating}
-                className={`flex items-center gap-2 px-6 py-3 rounded-xl text-sm transition-all duration-200 shadow-lg shrink-0 ${
-                  generating ? "bg-gray-200 text-gray-400 shadow-none cursor-not-allowed"
-                  : scheduleResult ? "bg-gray-100 hover:bg-gray-200 text-gray-600 shadow-gray-100"
-                  : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200"
-                }`} style={{ fontWeight: 600 }}>
-                {generating ? <><RefreshCw className="w-4 h-4 animate-spin" />排班中…</>
-                  : scheduleResult ? <><RefreshCw className="w-4 h-4" />重新排班</>
-                  : <><Zap className="w-4 h-4" />一键排班</>}
-              </button>
+              <div className="flex items-center gap-3 flex-wrap justify-end">
+                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+                  <span className="text-xs text-gray-500 whitespace-nowrap" style={{ fontWeight: 500 }}>每班最少人数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={globalMinReq}
+                    onChange={(e) => setGlobalMinReq(Math.max(1, Number(e.target.value)))}
+                    className="w-14 text-center text-sm border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-white transition-all"
+                    style={{ fontWeight: 600 }}
+                  />
+                  <button
+                    onClick={handleSaveMinReq}
+                    disabled={savingMinReq}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 hover:border-gray-300 text-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ fontWeight: 500 }}
+                  >
+                    {savingMinReq ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3 text-green-500" />}
+                    保存
+                  </button>
+                </div>
+                <button onClick={handleGenerate} disabled={generating}
+                  className={`flex items-center gap-2 px-6 py-3 rounded-xl text-sm transition-all duration-200 shadow-lg shrink-0 ${
+                    generating ? "bg-gray-200 text-gray-400 shadow-none cursor-not-allowed"
+                    : scheduleResult ? "bg-gray-100 hover:bg-gray-200 text-gray-600 shadow-gray-100"
+                    : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200"
+                  }`} style={{ fontWeight: 600 }}>
+                  {generating ? <><RefreshCw className="w-4 h-4 animate-spin" />排班中…</>
+                    : scheduleResult ? <><RefreshCw className="w-4 h-4" />重新排班</>
+                    : <><Zap className="w-4 h-4" />一键排班</>}
+                </button>
+              </div>
             </div>
           </div>
           {generating && (

@@ -163,3 +163,21 @@ export async function apiUpdatePersonalAdjustment(
   );
 }
 
+// ============ B 端：全局班次最少人数配置 ============
+
+export interface MinRequiredConfig {
+  min_required: number;
+}
+
+export async function apiGetGlobalMinRequired() {
+  return request<MinRequiredConfig>(`/api/admin/shifts/min-required`);
+}
+
+export async function apiUpdateGlobalMinRequired(payload: MinRequiredConfig) {
+  return request<MessageResponse>(`/api/admin/shifts/min-required`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
