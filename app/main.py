@@ -255,20 +255,24 @@ def _pick_candidate_for_shift(
     pref_rank_map: Dict[Tuple[str, str], int],
     member_assigned_count: Dict[str, int],
     member_capacity: Dict[str, int],
+    member_options_count: Dict[str, int],
     already_assigned: Optional[List[str]] = None,
 ) -> Optional[models.Member]:
     """
-    从 candidates 中选出最优候选人：
+    从 candidates 中选出最优候选人（稀缺度优先策略）：
     - 必须报名了该班次（pref_rank_map 中存在）
     - 排班次数未达上限
     - 未已分配到该班次
-    - 排序依据：(已排次数 ASC, 志愿排名 ASC, 学号 ASC) ── 优先选最闲的人
+    - 排序依据（多维权重，数字越小越优先）：
+        1. assigned_count  : 已排次数最少的人优先（绝对公平）
+        2. options_count   : 可用志愿数最少的人优先（拯救稀缺成员）
+        3. preference_rank : 志愿排名越靠前越优先（提升满意度）
+        4. student_id      : 学号字典序作为最终稳定排序键
     """
     if already_assigned is None:
         already_assigned = []
     assigned_set = set(already_assigned)
-    best: Optional[models.Member] = None
-    best_score: Optional[Tuple[int, int, str]] = None
+    eligible: List[Tuple[Tuple[int, int, int, str], models.Member]] = []
     for m in candidates:
         if m.student_id in assigned_set:
             continue
@@ -277,11 +281,17 @@ def _pick_candidate_for_shift(
         rank = pref_rank_map.get((m.student_id, shift_id))
         if rank is None:
             continue
-        score = (member_assigned_count[m.student_id], rank, m.student_id)
-        if best_score is None or score < best_score:
-            best_score = score
-            best = m
-    return best
+        score = (
+            member_assigned_count[m.student_id],
+            member_options_count.get(m.student_id, 0),
+            rank,
+            m.student_id,
+        )
+        eligible.append((score, m))
+    if not eligible:
+        return None
+    eligible.sort(key=lambda x: x[0])
+    return eligible[0][1]
 
 
 # ─── Schedule generation ──────────────────────────────────────────────────────
@@ -289,17 +299,26 @@ def _pick_candidate_for_shift(
 @app.post("/api/admin/schedule/generate", response_model=MessageResponse)
 def generate_schedule(db: Session = Depends(get_db)):
     """
-    两阶段贪心排班算法：
+    稀缺度优先（Scarcity-First）两阶段贪心排班算法：
 
-    阶段一（组长优先 Leader-First）：
-      遍历所有班次，为每个班次强制分配 1 名组长（is_leader=True）。
-      - 优先从报名该班次的副部长中，选已排次数最少者。
+    预处理：
+      - options_count : 每位成员报名的可用班次总数，越小代表时间越缺乏弹性，优先安排。
+      - demand_count  : 每个班次被多少人报名，越小代表班次越冷门，优先处理。
+
+    阶段一（组长优先 Leader-First，按 demand_count 升序遍历班次）：
+      遍历所有班次（冷门优先），为每个班次强制分配 1 名组长（is_leader=True）。
+      - 优先从报名该班次的副部长中，按 (已排次数, options_count, 志愿排名, 学号) 选最优候选。
       - 无可用副部，则从部长（含主席/副主席）中走同样逻辑。
-      - 均衡原则：排序依据 (已排次数 ASC, 志愿排名 ASC, 学号 ASC)。
 
-    阶段二（填充普通成员）：
-      - 遍历班次，补充普通成员直至达到 min_required 人数下限。
-      - 再次遍历所有成员，将剩余配额填入其志愿班次（均衡分配）。
+    阶段二（填充普通成员，同样按 demand_count 升序遍历班次）：
+      - 补充普通成员直至达到 min_required 人数下限。
+      - 再次遍历所有成员（按 options_count 升序），将剩余配额填入其志愿班次。
+
+    候选人排序依据（多维权重，数字越小越优先）：
+      1. assigned_count  : 已排次数最少的人优先（绝对公平）
+      2. options_count   : 可用志愿数最少的人优先（拯救稀缺成员）
+      3. preference_rank : 志愿排名越靠前越优先（提升满意度）
+      4. student_id      : 学号字典序（稳定排序）
     """
     members: List[models.Member] = (
         db.query(models.Member)
@@ -308,7 +327,7 @@ def generate_schedule(db: Session = Depends(get_db)):
         .all()
     )
     if not members:
-        raise HTTPException(status_code=400, detail="暂无已提交志愿的成员，无法生成排班")
+        raise HTTPException(status_code=400, detail='暂无已提交志愿的成员，无法生成排班')
 
     shifts: List[models.Shift] = db.query(models.Shift).order_by(models.Shift.shift_id.asc()).all()
     if not shifts:
@@ -332,47 +351,62 @@ def generate_schedule(db: Session = Depends(get_db)):
     }
     member_assigned_count: Dict[str, int] = {m.student_id: 0 for m in members}
 
-    # shift_assignees: shift_id -> list of (student_id, is_leader)
-    shift_assignees: Dict[str, List[Tuple[str, bool]]] = {s.shift_id: [] for s in shifts}
+    # options_count
+    submitted_ids = {m.student_id for m in members}
+    member_options_count: Dict[str, int] = {m.student_id: 0 for m in members}
+    for (student_id, _shift_id) in pref_rank_map:
+        if student_id in member_options_count:
+            member_options_count[student_id] += 1
 
+    # demand_count
+    demand_count: Dict[str, int] = {s.shift_id: 0 for s in shifts}
+    for (student_id, shift_id) in pref_rank_map:
+        if student_id in submitted_ids and shift_id in demand_count:
+            demand_count[shift_id] += 1
+
+    shifts_by_scarcity: List[models.Shift] = sorted(
+        shifts, key=lambda s: (demand_count.get(s.shift_id, 0), s.shift_id)
+    )
+
+    shift_assignees: Dict[str, List[Tuple[str, bool]]] = {s.shift_id: [] for s in shifts}
     vice_ministers = [m for m in members if _is_vice_minister(m.position)]
     ministers = [m for m in members if _is_minister(m.position)]
 
     db.query(models.Schedule).delete()
     db.commit()
 
-    # ── 阶段一：为每个班次强制分配 1 名组长 ──────────────────────────────────
-    for s in shifts:
-        
+    for s in shifts_by_scarcity:
         assigned_ids = [aid for aid, _ in shift_assignees[s.shift_id]]
         leader = _pick_candidate_for_shift(
             s.shift_id, vice_ministers, pref_rank_map,
-            member_assigned_count, member_capacity, assigned_ids,
+            member_assigned_count, member_capacity, member_options_count, assigned_ids,
         )
         if leader is None:
             leader = _pick_candidate_for_shift(
                 s.shift_id, ministers, pref_rank_map,
-                member_assigned_count, member_capacity, assigned_ids,
+                member_assigned_count, member_capacity, member_options_count, assigned_ids,
             )
         if leader is not None:
             shift_assignees[s.shift_id].append((leader.student_id, True))
             member_assigned_count[leader.student_id] += 1
 
-    # Phase 2: fill up to min_required
-    for s in shifts:
+    for s in shifts_by_scarcity:
         while len(shift_assignees[s.shift_id]) < (s.min_required or 1):
             assigned_ids = [aid for aid, _ in shift_assignees[s.shift_id]]
             cand = _pick_candidate_for_shift(
                 s.shift_id, members, pref_rank_map,
-                member_assigned_count, member_capacity, assigned_ids,
+                member_assigned_count, member_capacity, member_options_count, assigned_ids,
             )
             if cand is None:
                 break
             shift_assignees[s.shift_id].append((cand.student_id, False))
             member_assigned_count[cand.student_id] += 1
 
-    # Phase 2b: use remaining quota
-    for m in members:
+    members_by_scarcity = sorted(
+        members,
+        key=lambda m: (member_options_count.get(m.student_id, 0), m.student_id),
+    )
+    for m in members_by_scarcity:
         while member_assigned_count[m.student_id] < member_capacity[m.student_id]:
             m_prefs = [
                 (s_id, rank)
@@ -402,10 +436,10 @@ def generate_schedule(db: Session = Depends(get_db)):
                 is_leader=is_leader,
             ))
     db.commit()
-    return MessageResponse(message="排班生成成功")
+    return MessageResponse(message='排班生成成功')
 
 
-@app.get("/api/admin/schedule", response_model=ScheduleResultResponse)
+@app.get('/api/admin/schedule', response_model=ScheduleResultResponse)
 def get_schedule(db: Session = Depends(get_db)):
     rows: List[models.Schedule] = db.query(models.Schedule).order_by(models.Schedule.shift_id.asc()).all()
     if not rows:
@@ -417,22 +451,22 @@ def get_schedule(db: Session = Depends(get_db)):
         if not m:
             continue
         result.setdefault(r.shift_id, []).append({
-            "studentId": m.student_id,
-            "name": m.name,
-            "department": m.department,
-            "position": m.position,
-            "submitted": m.has_submitted,
-            "shifts": [],
-            "is_leader": r.is_leader,
+            'studentId': m.student_id,
+            'name': m.name,
+            'department': m.department,
+            'position': m.position,
+            'submitted': m.has_submitted,
+            'shifts': [],
+            'is_leader': r.is_leader,
         })
     return result
 
 
-@app.get("/api/admin/schedule/personal/{student_id}", response_model=PersonalAdjustmentData)
+@app.get('/api/admin/schedule/personal/{student_id}', response_model=PersonalAdjustmentData)
 def get_personal_adjustment(student_id: str, db: Session = Depends(get_db)):
     member = db.query(models.Member).filter(models.Member.student_id == student_id).first()
     if not member:
-        raise HTTPException(status_code=404, detail="成员不存在")
+        raise HTTPException(status_code=404, detail='成员不存在')
     current_count = db.query(models.Schedule).filter(models.Schedule.student_id == student_id).count()
     max_count = _max_count_by_position(member.position)
     prefs: List[models.Preference] = (
@@ -461,7 +495,7 @@ def get_personal_adjustment(student_id: str, db: Session = Depends(get_db)):
     )
     member_map: Dict[str, models.Member] = {m.student_id: m for m in db.query(models.Member).all()}
     headcount_map: Dict[str, Dict[str, int]] = {
-        sid: {"ministers": 0, "vice_ministers": 0, "officers": 0} for sid in related_shift_ids
+        sid: {'ministers': 0, 'vice_ministers': 0, 'officers': 0} for sid in related_shift_ids
     }
     for row in all_sched_rows:
         m2 = member_map.get(row.student_id)
@@ -478,15 +512,15 @@ def get_personal_adjustment(student_id: str, db: Session = Depends(get_db)):
     for sid in sorted(related_shift_ids, key=sort_key):
         shift = shift_map.get(sid)
         if shift:
-            time_slot_str = f"{shift.week} {shift.day} {shift.time_slot}"
+            time_slot_str = f'{shift.week} {shift.day} {shift.time_slot}'
         else:
             week, day, ts = _parse_shift_id(sid)
-            time_slot_str = f"{week} {day} {ts}"
-        hc = headcount_map.get(sid, {"ministers": 0, "vice_ministers": 0, "officers": 0})
+            time_slot_str = f'{week} {day} {ts}'
+        hc = headcount_map.get(sid, {'ministers': 0, 'vice_ministers': 0, 'officers': 0})
         related_shifts_payload.append({
-            "shift_id": sid, "time_slot": time_slot_str,
-            "preference_rank": pref_rank_map.get(sid),
-            "is_assigned": sid in assigned_shift_ids, "headcount": hc,
+            'shift_id': sid, 'time_slot': time_slot_str,
+            'preference_rank': pref_rank_map.get(sid),
+            'is_assigned': sid in assigned_shift_ids, 'headcount': hc,
         })
     return PersonalAdjustmentData(
         student_id=member.student_id, name=member.name, role=member.position,
@@ -494,19 +528,18 @@ def get_personal_adjustment(student_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.put("/api/admin/schedule/personal/{student_id}", response_model=MessageResponse)
+@app.put('/api/admin/schedule/personal/{student_id}', response_model=MessageResponse)
 def update_personal_adjustment(
     student_id: str, payload: PersonalAdjustmentUpdateRequest, db: Session = Depends(get_db)
 ):
     member = db.query(models.Member).filter(models.Member.student_id == student_id).first()
     if not member:
-        raise HTTPException(status_code=404, detail="成员不存在")
+        raise HTTPException(status_code=404, detail='成员不存在')
     for sid in payload.assigned_shift_ids:
         if not db.query(models.Shift).filter(models.Shift.shift_id == sid).first():
             week, day, ts = _parse_shift_id(sid)
             db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=ts, min_required=1))
     db.commit()
-    # Use explicitly provided leader_shift_ids if given, else preserve existing
     if payload.leader_shift_ids:
         leader_set = set(payload.leader_shift_ids)
     else:
@@ -527,22 +560,22 @@ def update_personal_adjustment(
             is_leader=(sid in leader_set),
         ))
     db.commit()
-    return MessageResponse(message="个人排班已更新")
+    return MessageResponse(message='个人排班已更新')
 
 
-@app.get("/api/admin/shifts/min-required", response_model=MinRequiredConfig)
+@app.get('/api/admin/shifts/min-required', response_model=MinRequiredConfig)
 def get_global_min_required(db: Session = Depends(get_db)):
     shift = db.query(models.Shift).first()
     return MinRequiredConfig(min_required=shift.min_required if shift else 1)
 
 
-@app.put("/api/admin/shifts/min-required", response_model=MessageResponse)
+@app.put('/api/admin/shifts/min-required', response_model=MessageResponse)
 def update_global_min_required(payload: MinRequiredConfig, db: Session = Depends(get_db)):
-    db.query(models.Shift).update({"min_required": payload.min_required})
+    db.query(models.Shift).update({'min_required': payload.min_required})
     db.commit()
-    return MessageResponse(message="全局人数配置已更新")
+    return MessageResponse(message='全局人数配置已更新')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run('app.main:app', host='0.0.0.0', port=8000, reload=True)

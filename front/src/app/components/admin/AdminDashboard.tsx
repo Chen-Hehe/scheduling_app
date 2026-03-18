@@ -30,7 +30,6 @@ import {
   Check,
   Upload,
   FileSpreadsheet,
-  RotateCcw,
 } from "lucide-react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -154,7 +153,7 @@ function SubmittedList({ members }: { members: Member[] }) {
 export function AdminDashboard() {
   const navigate = useNavigate();
   const { logout } = useAdminAuth();
-  const { allMembers, importMembers, resetToDefault, isDefault } = useMembers();
+  const { allMembers, importMembers } = useMembers();
 
   const [scheduleReady, setScheduleReady] = useState(false);
   const [importPreview, setImportPreview] = useState<Member[] | null>(null);
@@ -283,10 +282,6 @@ export function AdminDashboard() {
 
   const cancelImport = () => { setImportPreview(null); setImportError(null); };
 
-  const handleResetToDefault = () => {
-    resetToDefault(); setScheduleReady(false); setImportPreview(null); setImportError(null);
-  };
-
   const handleLogout = () => { logout(); navigate("/admin/login"); };
 
   return (
@@ -333,11 +328,6 @@ export function AdminDashboard() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {!isDefault && (
-                  <button onClick={handleResetToDefault} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 text-xs transition-colors" style={{ fontWeight: 500 }} title="恢复为演示数据">
-                    <RotateCcw className="w-3.5 h-3.5" />恢复演示数据
-                  </button>
-                )}
                 <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} className="hidden" />
                 <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs transition-colors shadow-sm shadow-indigo-200" style={{ fontWeight: 600 }}>
                   <Upload className="w-3.5 h-3.5" />上传文件
@@ -346,13 +336,13 @@ export function AdminDashboard() {
             </div>
             <div className="px-6 py-2.5 bg-gray-50/50 flex items-center gap-3 text-xs">
               <span className="text-gray-400">当前数据源：</span>
-              {isDefault ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100" style={{ fontWeight: 500 }}>
-                  <Users className="w-3 h-3" />内置演示数据 · {total} 人
-                </span>
-              ) : (
+              {total > 0 ? (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-600 border border-green-100" style={{ fontWeight: 500 }}>
                   <FileSpreadsheet className="w-3 h-3" />已导入名单 · {total} 人
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 text-gray-400 border border-gray-200" style={{ fontWeight: 500 }}>
+                  <Users className="w-3 h-3" />暂无数据，请上传名单
                 </span>
               )}
             </div>
