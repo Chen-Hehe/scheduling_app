@@ -169,6 +169,7 @@ export async function apiUpdatePersonalAdjustment(
 
 export interface MinRequiredConfig {
   min_required: number;
+  max_capacity: number;
 }
 
 export async function apiGetGlobalMinRequired() {

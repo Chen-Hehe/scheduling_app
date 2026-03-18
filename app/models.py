@@ -39,6 +39,7 @@ class Shift(Base):
     day = Column(String(16), nullable=False)
     time_slot = Column(String(32), nullable=False)
     min_required = Column(Integer, nullable=False, default=1)
+    max_capacity = Column(Integer, nullable=False, default=10)
 
     preferences = relationship(
         "Preference",

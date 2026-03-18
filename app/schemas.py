@@ -99,4 +99,5 @@ class PersonalAdjustmentUpdateRequest(BaseModel):
 
 class MinRequiredConfig(BaseModel):
     min_required: int
+    max_capacity: int = 10
 

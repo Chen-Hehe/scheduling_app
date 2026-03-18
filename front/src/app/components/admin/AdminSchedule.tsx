@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+﻿import { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useAdminAuth } from "../../context/AdminAuthContext";
 import { useMembers } from "../../context/MemberContext";
@@ -196,6 +196,7 @@ export function AdminSchedule() {
   const [modalSlot, setModalSlot] = useState<{ slotKey: string; week: WeekType; day: string; time: string } | null>(null);
   const [modalMember, setModalMember] = useState<Member | null>(null);
   const [globalMinReq, setGlobalMinReq] = useState<number>(1);
+  const [globalMaxCap, setGlobalMaxCap] = useState<number>(10);
   const [savingMinReq, setSavingMinReq] = useState(false);
   const snapshotRef = useRef<ScheduleResult | null>(null);
 
@@ -204,7 +205,7 @@ export function AdminSchedule() {
 
   useEffect(() => {
     apiGetSchedule().then((r) => { if (r && Object.keys(r).length > 0) setScheduleResult(r); }).catch(() => {});
-    apiGetGlobalMinRequired().then((r) => setGlobalMinReq(r.min_required)).catch(() => {});
+    apiGetGlobalMinRequired().then((r) => { setGlobalMinReq(r.min_required); setGlobalMaxCap(r.max_capacity ?? 10); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -224,7 +225,7 @@ export function AdminSchedule() {
   const handleSaveMinReq = async () => {
     setSavingMinReq(true);
     try {
-      await apiUpdateGlobalMinRequired({ min_required: globalMinReq });
+      await apiUpdateGlobalMinRequired({ min_required: globalMinReq, max_capacity: globalMaxCap });
       // Simple inline toast via a temporary DOM alert alternative
       const toast = document.createElement("div");
       toast.textContent = "✓ 全局班次最少人数已保存";
@@ -518,6 +519,15 @@ export function AdminSchedule() {
                     min={1}
                     value={globalMinReq}
                     onChange={(e) => setGlobalMinReq(Math.max(1, Number(e.target.value)))}
+                    className="w-14 text-center text-sm border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-white transition-all"
+                    style={{ fontWeight: 600 }}
+                  />
+                  <span className="text-xs text-gray-400 whitespace-nowrap" style={{ fontWeight: 500 }}>最大容量</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={globalMaxCap}
+                    onChange={(e) => setGlobalMaxCap(Math.max(1, Number(e.target.value)))}
                     className="w-14 text-center text-sm border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-white transition-all"
                     style={{ fontWeight: 600 }}
                   />

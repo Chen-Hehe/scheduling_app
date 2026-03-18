@@ -24,6 +24,19 @@ from .schemas import (
 
 Base.metadata.create_all(bind=engine)
 
+# ─── Lightweight column migration (add max_capacity if missing) ───────────────
+def _run_migrations() -> None:
+    """Add new columns to existing tables without Alembic."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    shift_cols = [c["name"] for c in insp.get_columns("shifts")]
+    with engine.connect() as conn:
+        if "max_capacity" not in shift_cols:
+            conn.execute(text("ALTER TABLE shifts ADD COLUMN max_capacity INTEGER NOT NULL DEFAULT 10"))
+            conn.commit()
+
+_run_migrations()
+
 app = FastAPI(title="志愿排班系统后端", version="0.1.0")
 
 app.add_middleware(
@@ -334,9 +347,10 @@ def generate_schedule(db: Session = Depends(get_db)):
         pref_shift_ids = [r[0] for r in db.query(models.Preference.shift_id).distinct().all()]
         for sid in pref_shift_ids:
             week, day, time_slot = _parse_shift_id(sid)
-            db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=time_slot, min_required=1))
+            db.add(models.Shift(shift_id=sid, week=week, day=day, time_slot=time_slot, min_required=1, max_capacity=10))
         db.commit()
         shifts = db.query(models.Shift).order_by(models.Shift.shift_id.asc()).all()
+    shift_map = {s.shift_id: s for s in shifts}
 
     prefs: List[models.Preference] = (
         db.query(models.Preference)
@@ -418,6 +432,9 @@ def generate_schedule(db: Session = Depends(get_db)):
             for s_id, _rank in m_prefs:
                 already = [aid for aid, _ in shift_assignees.get(s_id, [])]
                 if m.student_id in already:
+                    continue
+                shift_info = shift_map.get(s_id)
+                if shift_info and len(already) >= shift_info.max_capacity:
                     continue
                 shift_assignees.setdefault(s_id, []).append((m.student_id, False))
                 member_assigned_count[m.student_id] += 1
@@ -566,14 +583,16 @@ def update_personal_adjustment(
 @app.get('/api/admin/shifts/min-required', response_model=MinRequiredConfig)
 def get_global_min_required(db: Session = Depends(get_db)):
     shift = db.query(models.Shift).first()
-    return MinRequiredConfig(min_required=shift.min_required if shift else 1)
+    if not shift:
+        return MinRequiredConfig(min_required=1, max_capacity=10)
+    return MinRequiredConfig(min_required=shift.min_required, max_capacity=shift.max_capacity)
 
 
-@app.put('/api/admin/shifts/min-required', response_model=MessageResponse)
+@app.put('/api/admin/shifts/min-required', response_model=MinRequiredConfig)
 def update_global_min_required(payload: MinRequiredConfig, db: Session = Depends(get_db)):
-    db.query(models.Shift).update({'min_required': payload.min_required})
+    db.query(models.Shift).update({'min_required': payload.min_required, 'max_capacity': payload.max_capacity})
     db.commit()
-    return MessageResponse(message='全局人数配置已更新')
+    return payload
 
 
 if __name__ == '__main__':
